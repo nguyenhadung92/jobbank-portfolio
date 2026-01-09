@@ -7,7 +7,7 @@ DOWNLOAD_URL = "https://drive.google.com/uc?export=download"
 LOCAL_PATH = Path("jobbank_master.parquet")
 
 # Read from Streamlit Secrets
-GDRIVE_FILE_ID = st.secrets["GDRIVE_FILE_ID"]
+GDRIVE_FILE_ID = st.secrets["14uB6vKTn2M_UBGGJAw072d4LgJ1rLsCc"]
 
 
 def is_parquet_file(path: Path) -> bool:

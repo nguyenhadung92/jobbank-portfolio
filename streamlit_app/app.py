@@ -1,13 +1,12 @@
-import re
 import streamlit as st
 import pandas as pd
 import requests
 from pathlib import Path
 
 LOCAL_PATH = Path("jobbank_master.parquet")
-GDRIVE_FILE_ID = st.secrets["GDRIVE_FILE_ID"]
-BASE_URL = "https://drive.google.com/uc?export=download"
 
+# Put this in Streamlit secrets
+DATA_URL = st.secrets["DATA_URL"]
 
 def is_parquet(path: Path) -> bool:
     if not path.exists() or path.stat().st_size < 4:
@@ -15,87 +14,26 @@ def is_parquet(path: Path) -> bool:
     with open(path, "rb") as f:
         return f.read(4) == b"PAR1"
 
-
-def _save_stream(resp: requests.Response, dest: Path) -> None:
-    resp.raise_for_status()
+def download_file(url: str, dest: Path) -> None:
+    r = requests.get(url, stream=True, timeout=300)
+    r.raise_for_status()
     with open(dest, "wb") as f:
-        for chunk in resp.iter_content(chunk_size=1024 * 1024):
+        for chunk in r.iter_content(chunk_size=1024 * 1024):
             if chunk:
                 f.write(chunk)
 
-
-def download_from_gdrive(file_id: str, dest: Path) -> None:
-    session = requests.Session()
-
-    # Get warning page
-    r = session.get(BASE_URL, params={"id": file_id}, timeout=300)
-    r.raise_for_status()
-
-    ctype = (r.headers.get("Content-Type") or "").lower()
-    if "text/html" not in ctype:
-        r_stream = session.get(BASE_URL, params={"id": file_id}, stream=True, timeout=300)
-        _save_stream(r_stream, dest)
-        return
-
-    html = r.text
-
-    # 1) Find the download form action (new Drive pages use a form)
-    # Example: <form id="download-form" action="https://drive.google.com/uc?export=download" method="post">
-    m_action = re.search(r'<form[^>]+id="download-form"[^>]+action="([^"]+)"[^>]*>', html)
-    if not m_action:
-        # fallback: any form with action containing /uc
-        m_action = re.search(r'<form[^>]+action="([^"]*\/uc[^"]*)"[^>]*>', html)
-
-    if not m_action:
-        raise RuntimeError("Could not find download form action in virus scan HTML.")
-
-    action_url = m_action.group(1).replace("&amp;", "&")
-
-    # Some pages use relative URL
-    if action_url.startswith("/"):
-        action_url = "https://drive.google.com" + action_url
-    elif action_url.startswith("uc?") or action_url.startswith("export?"):
-        action_url = "https://drive.google.com/" + action_url
-
-    # 2) Extract hidden inputs inside the form (confirm/uuid/at/etc.)
-    # We'll grab all: <input type="hidden" name="X" value="Y">
-    inputs = dict(re.findall(r'<input[^>]+type="hidden"[^>]+name="([^"]+)"[^>]+value="([^"]*)"', html))
-    # Always ensure id is present
-    inputs.setdefault("id", file_id)
-
-    # 3) Submit the form (usually POST)
-    r2 = session.post(action_url, data=inputs, stream=True, timeout=300)
-    r2.raise_for_status()
-    _save_stream(r2, dest)
-
-    # 4) Validate parquet
-    if not is_parquet(dest):
-        with open(dest, "rb") as f:
-            head = f.read(400)
-        raise RuntimeError(
-            "Still not parquet after submitting form. "
-            f"First bytes: {head!r}"
-        )
-
-
-
 @st.cache_data(show_spinner=True)
-def load_data(force: bool = False) -> pd.DataFrame:
+def load_data(force=False):
     if force and LOCAL_PATH.exists():
         LOCAL_PATH.unlink()
 
     if not LOCAL_PATH.exists() or not is_parquet(LOCAL_PATH):
         if LOCAL_PATH.exists():
             LOCAL_PATH.unlink()
-
-        st.info("Downloading dataset from Google Drive...")
-        download_from_gdrive(GDRIVE_FILE_ID, LOCAL_PATH)
-
-        if not is_parquet(LOCAL_PATH):
-            raise RuntimeError("Downloaded file is not a valid Parquet (PAR1 missing).")
+        st.info("Downloading dataset...")
+        download_file(DATA_URL, LOCAL_PATH)
 
     return pd.read_parquet(LOCAL_PATH)
-
 
 st.set_page_config(page_title="Canada Job Bank Dashboard", layout="wide")
 st.title("Canada Job Bank – Job Postings Dashboard")

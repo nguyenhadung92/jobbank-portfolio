@@ -3,6 +3,8 @@ import pandas as pd
 import requests
 from pathlib import Path
 
+st.set_page_config(page_title="Canada Job Bank Dashboard", layout="wide")
+
 DATA_URL = st.secrets["DATA_URL"]
 LOCAL_PATH = Path("jobbank_master.parquet")
 
@@ -18,7 +20,7 @@ def download(url: str, dest: Path) -> None:
                 f.write(chunk)
 
 @st.cache_data(show_spinner=True)
-def load_data(force=False):
+def load_data(force: bool = False) -> pd.DataFrame:
     if force and LOCAL_PATH.exists():
         LOCAL_PATH.unlink()
 
@@ -29,7 +31,8 @@ def load_data(force=False):
 
     return pd.read_parquet(LOCAL_PATH)
 
-st.title("Canada Job Bank – Job Postings Dashboard")
+# ================= UI =================
+st.title("🇨🇦 Canada Job Bank – Job Postings Dashboard")
 
 if st.button("🔄 Refresh data"):
     st.cache_data.clear()

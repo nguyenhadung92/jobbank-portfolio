@@ -28,53 +28,70 @@ def _save_stream(resp: requests.Response, dest: Path) -> None:
 def download_from_gdrive(file_id: str, dest: Path) -> None:
     """
     Robust Google Drive downloader:
-    - Handles "can't scan for viruses" warning page
-    - Extracts confirm token either from cookie or from HTML
+    - Works with virus scan warning HTML for large files
+    - Extracts confirm token from cookie OR from the warning HTML download link
     """
     session = requests.Session()
 
-    # 1) First request
+    # First request (often returns HTML warning page for big files)
     r = session.get(BASE_URL, params={"id": file_id}, stream=True, timeout=300)
+    r.raise_for_status()
 
-    # If Google already returns file (not html), save it
     ctype = (r.headers.get("Content-Type") or "").lower()
+
+    # If Google already returns the file, save directly
     if "text/html" not in ctype:
         _save_stream(r, dest)
         return
 
-    # 2) Try cookie-based token
+    # 1) Try cookie token
     token = None
     for k, v in r.cookies.items():
         if k.startswith("download_warning"):
             token = v
             break
 
-    # 3) If no cookie token, parse token from HTML
+    # 2) Parse token from HTML (virus scan page)
     if token is None:
         html = r.text
-        m = re.search(r'confirm=([0-9A-Za-z_]+)', html)
-        if m:
-            token = m.group(1)
+
+        # Look for /uc?export=download&confirm=XXXX&id=FILE_ID (may be HTML-escaped)
+        patterns = [
+            rf'href="\/uc\?export=download&amp;confirm=([0-9A-Za-z_]+)&amp;id={re.escape(file_id)}',
+            rf'href="\/uc\?export=download&confirm=([0-9A-Za-z_]+)&id={re.escape(file_id)}',
+            rf'confirm=([0-9A-Za-z_]+)&amp;id={re.escape(file_id)}',
+            rf'confirm=([0-9A-Za-z_]+)&id={re.escape(file_id)}',
+        ]
+        for p in patterns:
+            m = re.search(p, html)
+            if m:
+                token = m.group(1)
+                break
 
     if token is None:
-        # Save a small debug sample
-        html_sample = r.text[:500]
+        html_sample = r.text[:700]
         raise RuntimeError(
-            "Google Drive returned an HTML page but no confirm token was found. "
-            "Check sharing permission (Anyone with the link). "
+            "Google Drive returned an HTML virus-scan page but confirm token was not found. "
+            "Try re-sharing the file as 'Anyone with the link' OR re-upload the file to get a fresh link. "
             f"HTML sample: {html_sample}"
         )
 
-    # 4) Confirm download
+    # Confirm download
     r2 = session.get(
         BASE_URL,
         params={"id": file_id, "confirm": token},
         stream=True,
         timeout=300,
     )
+    r2.raise_for_status()
     _save_stream(r2, dest)
 
-
+if not is_parquet(dest):
+        # likely saved HTML instead of parquet
+    with open(dest, "rb") as f:
+            head = f.read(200)
+    raise RuntimeError(f"Still not parquet after confirm. First bytes: {head!r}")
+        
 @st.cache_data(show_spinner=True)
 def load_data(force: bool = False) -> pd.DataFrame:
     if force and LOCAL_PATH.exists():

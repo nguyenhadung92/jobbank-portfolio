@@ -3,7 +3,7 @@ import pandas as pd
 import requests
 from pathlib import Path
 
-DOWNLOAD_URL = "https://drive.google.com/uc?export=download"
+#DOWNLOAD_URL = "https://drive.google.com/uc?export=download"
 LOCAL_PATH = Path("jobbank_master.parquet")
 
 # ✅ read from Streamlit Secrets

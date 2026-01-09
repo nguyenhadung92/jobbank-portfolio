@@ -27,13 +27,11 @@ def _save_stream(resp: requests.Response, dest: Path) -> None:
 def download_from_gdrive(file_id: str, dest: Path) -> None:
     session = requests.Session()
 
-    # Step 1: get the warning page
+    # Get warning page
     r = session.get(BASE_URL, params={"id": file_id}, timeout=300)
     r.raise_for_status()
 
     ctype = (r.headers.get("Content-Type") or "").lower()
-
-    # If it's already a file, stream-download directly
     if "text/html" not in ctype:
         r_stream = session.get(BASE_URL, params={"id": file_id}, stream=True, timeout=300)
         _save_stream(r_stream, dest)
@@ -41,33 +39,43 @@ def download_from_gdrive(file_id: str, dest: Path) -> None:
 
     html = r.text
 
-    # Step 2: Extract the REAL "Download anyway" link from HTML
-    # It usually looks like: /uc?export=download&confirm=...&id=...&uuid=...
-    m = re.search(r'href="(\/uc\?export=download[^"]+)"', html)
-    if not m:
-        # sometimes it appears without quotes style changes
-        m = re.search(r'(\/uc\?export=download[^"&]+[^"]*)', html)
+    # 1) Find the download form action (new Drive pages use a form)
+    # Example: <form id="download-form" action="https://drive.google.com/uc?export=download" method="post">
+    m_action = re.search(r'<form[^>]+id="download-form"[^>]+action="([^"]+)"[^>]*>', html)
+    if not m_action:
+        # fallback: any form with action containing /uc
+        m_action = re.search(r'<form[^>]+action="([^"]*\/uc[^"]*)"[^>]*>', html)
 
-    if not m:
-        raise RuntimeError("Could not find the /uc?export=download... link in the virus warning page HTML.")
+    if not m_action:
+        raise RuntimeError("Could not find download form action in virus scan HTML.")
 
-    download_path = m.group(1)
+    action_url = m_action.group(1).replace("&amp;", "&")
 
-    # HTML uses &amp; - convert to normal &
-    download_path = download_path.replace("&amp;", "&")
+    # Some pages use relative URL
+    if action_url.startswith("/"):
+        action_url = "https://drive.google.com" + action_url
+    elif action_url.startswith("uc?") or action_url.startswith("export?"):
+        action_url = "https://drive.google.com/" + action_url
 
-    download_url = "https://drive.google.com" + download_path
+    # 2) Extract hidden inputs inside the form (confirm/uuid/at/etc.)
+    # We'll grab all: <input type="hidden" name="X" value="Y">
+    inputs = dict(re.findall(r'<input[^>]+type="hidden"[^>]+name="([^"]+)"[^>]+value="([^"]*)"', html))
+    # Always ensure id is present
+    inputs.setdefault("id", file_id)
 
-    # Step 3: download using the extracted URL (this includes uuid/extra params)
-    r2 = session.get(download_url, stream=True, timeout=300)
+    # 3) Submit the form (usually POST)
+    r2 = session.post(action_url, data=inputs, stream=True, timeout=300)
     r2.raise_for_status()
     _save_stream(r2, dest)
 
-    # Step 4: validate parquet
+    # 4) Validate parquet
     if not is_parquet(dest):
         with open(dest, "rb") as f:
-            head = f.read(300)
-        raise RuntimeError(f"Still not parquet. First bytes: {head!r}")
+            head = f.read(400)
+        raise RuntimeError(
+            "Still not parquet after submitting form. "
+            f"First bytes: {head!r}"
+        )
 
 
 

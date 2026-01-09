@@ -6,7 +6,6 @@ from pathlib import Path
 
 LOCAL_PATH = Path("jobbank_master.parquet")
 GDRIVE_FILE_ID = st.secrets["GDRIVE_FILE_ID"]
-
 BASE_URL = "https://drive.google.com/uc?export=download"
 
 
@@ -26,11 +25,6 @@ def _save_stream(resp: requests.Response, dest: Path) -> None:
 
 
 def download_from_gdrive(file_id: str, dest: Path) -> None:
-    """
-    Robust Google Drive downloader:
-    - Works with virus scan warning HTML for large files
-    - Extracts confirm token from cookie OR from the warning HTML download link
-    """
     session = requests.Session()
 
     # First request (often returns HTML warning page for big files)
@@ -54,8 +48,6 @@ def download_from_gdrive(file_id: str, dest: Path) -> None:
     # 2) Parse token from HTML (virus scan page)
     if token is None:
         html = r.text
-
-        # Look for /uc?export=download&confirm=XXXX&id=FILE_ID (may be HTML-escaped)
         patterns = [
             rf'href="\/uc\?export=download&amp;confirm=([0-9A-Za-z_]+)&amp;id={re.escape(file_id)}',
             rf'href="\/uc\?export=download&confirm=([0-9A-Za-z_]+)&id={re.escape(file_id)}',
@@ -71,8 +63,8 @@ def download_from_gdrive(file_id: str, dest: Path) -> None:
     if token is None:
         html_sample = r.text[:700]
         raise RuntimeError(
-            "Google Drive returned an HTML virus-scan page but confirm token was not found. "
-            "Try re-sharing the file as 'Anyone with the link' OR re-upload the file to get a fresh link. "
+            "Virus-scan page returned but confirm token not found. "
+            "Double-check sharing: Anyone with the link. "
             f"HTML sample: {html_sample}"
         )
 
@@ -86,13 +78,13 @@ def download_from_gdrive(file_id: str, dest: Path) -> None:
     r2.raise_for_status()
     _save_stream(r2, dest)
 
+    # Validate result is parquet (avoid saving HTML)
     if not is_parquet(dest):
-        # likely saved HTML instead of parquet
         with open(dest, "rb") as f:
             head = f.read(200)
         raise RuntimeError(f"Still not parquet after confirm. First bytes: {head!r}")
 
-   
+
 @st.cache_data(show_spinner=True)
 def load_data(force: bool = False) -> pd.DataFrame:
     if force and LOCAL_PATH.exists():

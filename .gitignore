@@ -1,0 +1,24 @@
+# =====================
+# IGNORE LARGE DATA
+# =====================
+data/raw_monthly/
+data/processed/jobbank_master.csv
+data/processed/jobbank_master.parquet
+data/clean_monthly/
+
+# If parquet grows too large later, uncomment this:
+# data/processed/jobbank_master.parquet
+
+# =====================
+# PYTHON
+# =====================
+__pycache__/
+*.pyc
+.venv/
+.env
+
+# =====================
+# OS
+# =====================
+.DS_Store
+Thumbs.db

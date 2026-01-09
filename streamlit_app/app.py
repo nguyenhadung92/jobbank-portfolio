@@ -27,61 +27,47 @@ def _save_stream(resp: requests.Response, dest: Path) -> None:
 def download_from_gdrive(file_id: str, dest: Path) -> None:
     session = requests.Session()
 
-    r = session.get(BASE_URL, params={"id": file_id}, stream=True, timeout=300)
+    # Step 1: get the warning page
+    r = session.get(BASE_URL, params={"id": file_id}, timeout=300)
     r.raise_for_status()
 
     ctype = (r.headers.get("Content-Type") or "").lower()
 
-    # If not HTML -> it's the file
+    # If it's already a file, stream-download directly
     if "text/html" not in ctype:
-        _save_stream(r, dest)
+        r_stream = session.get(BASE_URL, params={"id": file_id}, stream=True, timeout=300)
+        _save_stream(r_stream, dest)
         return
 
     html = r.text
 
-    # 1) Cookie token (older behavior)
-    token = None
-    for k, v in r.cookies.items():
-        if k.startswith("download_warning"):
-            token = v
-            break
+    # Step 2: Extract the REAL "Download anyway" link from HTML
+    # It usually looks like: /uc?export=download&confirm=...&id=...&uuid=...
+    m = re.search(r'href="(\/uc\?export=download[^"]+)"', html)
+    if not m:
+        # sometimes it appears without quotes style changes
+        m = re.search(r'(\/uc\?export=download[^"&]+[^"]*)', html)
 
-    # 2) Look for confirm token anywhere in HTML (newer behavior)
-    if token is None:
-        m = re.search(r"[?&]confirm=([0-9A-Za-z_]+)", html)
-        if m:
-            token = m.group(1)
+    if not m:
+        raise RuntimeError("Could not find the /uc?export=download... link in the virus warning page HTML.")
 
-    # 3) Look for hidden form input: name="confirm" value="..."
-    if token is None:
-        m = re.search(r'name="confirm"\s+value="([^"]+)"', html)
-        if m:
-            token = m.group(1)
+    download_path = m.group(1)
 
-    if token is None:
-        # As a last resort, dump more context for debugging
-        sample = html[:1500]
-        raise RuntimeError(
-            "Virus-scan page returned but confirm token not found. "
-            "This can happen if Google changes the page structure. "
-            f"HTML head sample: {sample}"
-        )
+    # HTML uses &amp; - convert to normal &
+    download_path = download_path.replace("&amp;", "&")
 
-    # Confirm download
-    r2 = session.get(
-        BASE_URL,
-        params={"id": file_id, "confirm": token},
-        stream=True,
-        timeout=300,
-    )
+    download_url = "https://drive.google.com" + download_path
+
+    # Step 3: download using the extracted URL (this includes uuid/extra params)
+    r2 = session.get(download_url, stream=True, timeout=300)
     r2.raise_for_status()
     _save_stream(r2, dest)
 
-    # Validate parquet
+    # Step 4: validate parquet
     if not is_parquet(dest):
         with open(dest, "rb") as f:
             head = f.read(300)
-        raise RuntimeError(f"Still not parquet after confirm. First bytes: {head!r}")
+        raise RuntimeError(f"Still not parquet. First bytes: {head!r}")
 
 
 

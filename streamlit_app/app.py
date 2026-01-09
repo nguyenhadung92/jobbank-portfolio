@@ -27,45 +27,44 @@ def _save_stream(resp: requests.Response, dest: Path) -> None:
 def download_from_gdrive(file_id: str, dest: Path) -> None:
     session = requests.Session()
 
-    # First request (often returns HTML warning page for big files)
     r = session.get(BASE_URL, params={"id": file_id}, stream=True, timeout=300)
     r.raise_for_status()
 
     ctype = (r.headers.get("Content-Type") or "").lower()
 
-    # If Google already returns the file, save directly
+    # If not HTML -> it's the file
     if "text/html" not in ctype:
         _save_stream(r, dest)
         return
 
-    # 1) Try cookie token
+    html = r.text
+
+    # 1) Cookie token (older behavior)
     token = None
     for k, v in r.cookies.items():
         if k.startswith("download_warning"):
             token = v
             break
 
-    # 2) Parse token from HTML (virus scan page)
+    # 2) Look for confirm token anywhere in HTML (newer behavior)
     if token is None:
-        html = r.text
-        patterns = [
-            rf'href="\/uc\?export=download&amp;confirm=([0-9A-Za-z_]+)&amp;id={re.escape(file_id)}',
-            rf'href="\/uc\?export=download&confirm=([0-9A-Za-z_]+)&id={re.escape(file_id)}',
-            rf'confirm=([0-9A-Za-z_]+)&amp;id={re.escape(file_id)}',
-            rf'confirm=([0-9A-Za-z_]+)&id={re.escape(file_id)}',
-        ]
-        for p in patterns:
-            m = re.search(p, html)
-            if m:
-                token = m.group(1)
-                break
+        m = re.search(r"[?&]confirm=([0-9A-Za-z_]+)", html)
+        if m:
+            token = m.group(1)
+
+    # 3) Look for hidden form input: name="confirm" value="..."
+    if token is None:
+        m = re.search(r'name="confirm"\s+value="([^"]+)"', html)
+        if m:
+            token = m.group(1)
 
     if token is None:
-        html_sample = r.text[:700]
+        # As a last resort, dump more context for debugging
+        sample = html[:1500]
         raise RuntimeError(
             "Virus-scan page returned but confirm token not found. "
-            "Double-check sharing: Anyone with the link. "
-            f"HTML sample: {html_sample}"
+            "This can happen if Google changes the page structure. "
+            f"HTML head sample: {sample}"
         )
 
     # Confirm download
@@ -78,11 +77,12 @@ def download_from_gdrive(file_id: str, dest: Path) -> None:
     r2.raise_for_status()
     _save_stream(r2, dest)
 
-    # Validate result is parquet (avoid saving HTML)
+    # Validate parquet
     if not is_parquet(dest):
         with open(dest, "rb") as f:
-            head = f.read(200)
+            head = f.read(300)
         raise RuntimeError(f"Still not parquet after confirm. First bytes: {head!r}")
+
 
 
 @st.cache_data(show_spinner=True)

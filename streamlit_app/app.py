@@ -86,12 +86,13 @@ def download_from_gdrive(file_id: str, dest: Path) -> None:
     r2.raise_for_status()
     _save_stream(r2, dest)
 
-if not is_parquet(dest):
+    if not is_parquet(dest):
         # likely saved HTML instead of parquet
-    with open(dest, "rb") as f:
+        with open(dest, "rb") as f:
             head = f.read(200)
-    raise RuntimeError(f"Still not parquet after confirm. First bytes: {head!r}")
-        
+        raise RuntimeError(f"Still not parquet after confirm. First bytes: {head!r}")
+
+   
 @st.cache_data(show_spinner=True)
 def load_data(force: bool = False) -> pd.DataFrame:
     if force and LOCAL_PATH.exists():
